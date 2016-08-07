@@ -26,12 +26,14 @@
 (defun null (x)
   (eq x nil))
 
-(defun endp (x)
-  (if (null x)
-      t
-      (if (consp x)
-          nil
-          (error "The value `~S' is not a type list." x))))
+(defun endp (object)
+  "It returns true if OBJECT is NIL, false if OBJECT is a CONS, and an error
+   for any other type of OBJECT.
+
+   This is the recommended way to test for the end of a proper list."
+  (cond ((null object) t)
+        ((consp object) nil)
+        (t (error "The value `~S' is not a type list." object))))
 
 (defun car (x)
   "Return the CAR part of a cons, or NIL if X is null."
@@ -138,9 +140,6 @@
     (push (car list1) list2)
     (setq list1 (cdr list1)))
   list2)
-
-(defun reverse (list)
-  (revappend list '()))
 
 (defun sublis (alist tree &key key (test #'eql testp) (test-not #'eql test-not-p))
   (when (and testp test-not-p)
@@ -323,12 +322,11 @@
   alist)
 
 (defun copy-alist (alist)
-  (let ((new-alist ()))
+  "Return a new association list which is EQUAL to ALIST."
+  (with-collect
     (while alist
-      (push (cons (caar alist) (cdar alist)) new-alist)
-      (setq alist (cdr alist)))
-    (reverse new-alist)))
-
+      (collect (cons (caar alist) (cdar alist)))
+      (setq alist (cdr alist)))))
 
 (define-setf-expander car (x)
   (let ((cons (gensym))

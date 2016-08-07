@@ -22,10 +22,26 @@
 
 (in-package :jscl)
 
-(defvar *version* "0.3.0")
-
 (defvar *base-directory*
-  (or #.*load-pathname* *default-pathname-defaults*))
+  (if #.*load-pathname*
+      (make-pathname :name nil :type nil :defaults #.*load-pathname*)
+      *default-pathname-defaults*))
+
+(defvar *version*
+  ;; Read the version from the package.json file. We could have used a
+  ;; json library to parse this, but that would introduce a dependency
+  ;; and we are not using ASDF yet.
+  (with-open-file (in (merge-pathnames "package.json" *base-directory*))
+    (loop
+       for line = (read-line in nil)
+       while line
+       when (search "\"version\":" line)
+       do (let ((colon (position #\: line))
+                (comma (position #\, line)))
+            (return (string-trim '(#\newline #\" #\tab #\space)
+                                 (subseq line (1+ colon) comma)))))))
+
+
 
 ;;; List of all the source files that need to be compiled, and whether they
 ;;; are to be compiled just by the host, by the target JSCL, or by both.
@@ -45,6 +61,8 @@
     ("compat"        :host)
     ("setf"          :target)
     ("utils"         :both)
+    ("defstruct"     :both)
+    ("lambda-list"   :both)
     ("numbers"       :target)
     ("char"          :target)
     ("list"          :target)
@@ -54,19 +72,17 @@
     ("stream"        :target)
     ("hash-table"    :target)
     ("print"         :target)
-    ("documentation" :target)
     ("misc"          :target)
     ("ffi"           :target)
     ("symbol"        :target)
     ("package"       :target)
     ("read"          :both)
-    ("defstruct"     :both)
-    ("lambda-list"   :both)
     ("conditions"    :both)
     ("backquote"     :both)
     ("compiler"
      ("codegen"      :both)
      ("compiler"     :both))
+    ("documentation" :target)
     ("toplevel"      :target)))
 
 
@@ -119,7 +135,8 @@
 
 (defun !compile-file (filename out &key print)
   (let ((*compiling-file* t)
-        (*compile-print-toplevels* print))
+        (*compile-print-toplevels* print)
+        (*package* *package*))
     (let* ((source (read-whole-file filename))
            (in (make-string-stream source)))
       (format t "Compiling ~a...~%" (enough-namestring filename))
@@ -145,43 +162,69 @@
     ;; not collide with the compiler itself.
     (late-compile
      `(progn
-        (setq *literal-table* ',*literal-table*)
         (setq *variable-counter* ,*variable-counter*)
         (setq *gensym-counter* ,*gensym-counter*)))
     (late-compile `(setq *literal-counter* ,*literal-counter*))))
 
 
+
+(defun compile-application (files output &key shebang)
+  (with-compilation-environment
+      (with-open-file (out output :direction :output :if-exists :supersede)
+        (when shebang
+          (format out "#!/usr/bin/env node~%"))
+        (format out "(function(jscl){~%")
+        (format out "'use strict';~%")
+        (format out "(function(values, internals){~%")
+        (dolist (input files)
+          (!compile-file input out))
+        (format out "})(jscl.internals.pv, jscl.internals);~%")
+        (format out "})( typeof require !== 'undefined'? require('./jscl'): window.jscl )~%"))))
+
+
+
 (defun bootstrap (&optional verbose)
-  (let ((*features* (cons :jscl *features*))
-        (*package* (find-package "JSCL")))
+  (let ((*features* (list* :jscl :jscl-xc *features*))
+        (*package* (find-package "JSCL"))
+        (*default-pathname-defaults* *base-directory*))
     (setq *environment* (make-lexenv))
-    (setq *literal-table* nil)
-    (setq *variable-counter* 0
-          *gensym-counter* 0
-          *literal-counter* 0)
-    (with-open-file (out (merge-pathnames "jscl.js" *base-directory*)
-                         :direction :output
-                         :if-exists :supersede)
-      (write-string (read-whole-file (source-pathname "prelude.js")) out)
-      (do-source input :target
-        (!compile-file input out :print verbose))
-      (dump-global-environment out))
+    (with-compilation-environment
+      (with-open-file (out (merge-pathnames "jscl.js" *base-directory*)
+                           :direction :output
+                           :if-exists :supersede)
+        (format out "(function(){~%")
+        (format out "'use strict';~%")
+        (write-string (read-whole-file (source-pathname "prelude.js")) out)
+        (do-source input :target
+          (!compile-file input out :print verbose))
+        (dump-global-environment out)
+        (format out "})();~%")))
+
+    (report-undefined-functions)
+
     ;; Tests
-    (with-open-file (out (merge-pathnames "tests.js" *base-directory*)
-                         :direction :output
-                         :if-exists :supersede)
-      (dolist (input (append (directory "tests.lisp")
-                             (directory "tests/*.lisp")
-                             (directory "tests-report.lisp")))
-        (!compile-file input out)))
-    (report-undefined-functions)))
+    (compile-application
+     `(,(source-pathname "tests.lisp" :directory nil)
+        ,@(directory (source-pathname "*" :directory '(:relative "tests") :type "lisp"))
+        ,(source-pathname "tests-report.lisp" :directory nil))
+     (merge-pathnames "tests.js" *base-directory*))
+
+    ;; Web REPL
+    (compile-application (list (source-pathname "repl.lisp" :directory '(:relative "repl-web")))
+                         (merge-pathnames "repl-web.js" *base-directory*))
+
+    ;; Node REPL
+    (compile-application (list (source-pathname "repl.lisp" :directory '(:relative "repl-node")))
+                         (merge-pathnames "repl-node.js" *base-directory*)
+                         :shebang t)))
 
 
 ;;; Run the tests in the host Lisp implementation. It is a quick way
 ;;; to improve the level of trust of the tests.
 (defun run-tests-in-host ()
-  (let ((*package* (find-package "JSCL")))
-    (load "tests.lisp")
+  (let ((*package* (find-package "JSCL"))
+        (*default-pathname-defaults* *base-directory*))
+    (load (source-pathname "tests.lisp" :directory nil))
     (let ((*use-html-output-p* nil))
       (declare (special *use-html-output-p*))
       (dolist (input (directory "tests/*.lisp"))

@@ -19,7 +19,10 @@
 (/debug "loading toplevel.lisp!")
 
 (defun eval (x)
-  (js-eval (compile-toplevel x t)))
+  (let ((jscode
+         (with-compilation-environment
+             (compile-toplevel x t t))))
+    (js-eval jscode)))
 
 (defvar * nil)
 (defvar ** nil)
@@ -263,93 +266,44 @@
                    month)
               year)))
 
-
-(defun load-history ()
-  (let ((raw (#j:localStorage:getItem "jqhist")))
-    (unless (js-null-p raw)
-      (#j:jqconsole:SetHistory (#j:JSON:parse raw)))))
-
-(defun save-history ()
-  (#j:localStorage:setItem "jqhist" (#j:JSON:stringify (#j:jqconsole:GetHistory))))
+(when (and (string/= (%js-typeof |module|) "undefined")
+           (string= (%js-typeof |phantom|) "undefined"))
+  (push :node *features*))
 
 
-;;; Decides wheater the input the user has entered is completed or we
-;;; should accept one more line.
-(defun indent-level (string)
-  (let ((i 0)
-        (stringp nil)
-        (s (length string))
-        (depth 0))
-
-    (while (< i s)
-      (cond
-        (stringp
-         (case (char string i)
-           (#\\
-            (incf i))
-           (#\"
-            (setq stringp nil)
-            (decf depth))))
-        (t
-         (case (char string i)
-           (#\( (incf depth))
-           (#\) (decf depth))
-           (#\"
-            (incf depth)
-            (setq stringp t)))))
-      (incf i))
-
-    (if (and (zerop depth))
-        nil
-        ;; We should use something based on DEPTH in order to make
-        ;; edition nice, but the behaviour is a bit weird with
-        ;; jqconsole.
-        0)))
-
-
-
-(defun toplevel ()
-  (let ((prompt (format nil "~a> " (package-name *package*))))
-    (#j:jqconsole:Write prompt "jqconsole-prompt"))
-  (flet ((process-input (input)
-           ;; Capture unhandled Javascript exceptions. We evaluate the
-           ;; form and set successp to T. However, if a non-local exit
-           ;; happens, we cancel it, so it is not propagated more.
-           (%js-try
-
-            ;; Capture unhandled Lisp conditeions.
-            (handler-case
-                (let* ((form (read-from-string input))
-                       (results (multiple-value-list (eval-interactive form))))
-                  (dolist (x results)
-                    (#j:jqconsole:Write (format nil "~S~%" x) "jqconsole-return")))
-              (error (err)
-                (#j:jqconsole:Write "ERROR: " "jqconsole-error")
-                (#j:jqconsole:Write (apply #'format nil (!condition-args err)) "jqconsole-error")
-                (#j:jqconsole:Write (string #\newline) "jqconsole-error")))
-            
-            (catch (err)
-              (#j:console:log err)
-              (#j:jqconsole:Write (format nil "ERROR[!]: ~a~%" err) "jqconsole-error")))
-           
-           (save-history)
-           (toplevel)))
-    (#j:jqconsole:Prompt t #'process-input #'indent-level)))
-
-
-(defun init (&rest args)
-  (#j:jqconsole:RegisterMatching "(" ")" "parents")
-
+(defun welcome-message ()
   (format t "Welcome to ~a ~a (~a)~%~%"
           (lisp-implementation-type)
           (lisp-implementation-version)
           (compilation-notice))
-
   (format t "JSCL is a Common Lisp implementation on Javascript.~%")
-  (%write-string
-   (format nil "For more information, visit the project page at <a href=\"https://github.com/davazp/jscl\">GitHub</a>.~%~%"))
+  (if (find :node *features*)
+      (format t "For more information, visit the project page at https://github.com/davazp/jscl.~%~%")
+      (%write-string
+       (format nil "For more information, visit the project page at <a href=\"https://github.com/davazp/jscl\">GitHub</a>.~%~%")
+       nil)))
 
-  (load-history)
-  (toplevel))
 
-(#j:window:addEventListener "load" #'init)
+;;; Basic *standard-output* stream. This will usually be overriden by
+;;; web or node REPL.
+;;;
+;;; TODO: Cache character operation so they result in a single call to
+;;; console.log.
+;;;
+(setq *standard-output*
+      (vector 'stream
+              (lambda (ch)
+                (#j:console:log (string ch)))
+              (lambda (string)
+                (#j:console:log string))))
+
+
+(if (find :node *features*)
+    (setq *root* (%js-vref "global"))
+    (setq *root* (%js-vref "window")))
+
+
+
+(defun require (name)
+  (if (find :node *features*)
+      (funcall (%js-vref "require") name)))

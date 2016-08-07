@@ -15,11 +15,12 @@
 
 (/debug "loading package.lisp!")
 
-(defvar *package-table* #j:packages)
+(defvar *package-table*
+  (%js-vref "packages"))
 
 (defun list-all-packages ()
   (let ((packages nil))
-    (map-for-in (lambda (name) (push name packages))
+    (map-for-in (lambda (name) (pushnew name packages))
                 *package-table*)
     packages))
 
@@ -27,6 +28,14 @@
   (if (packagep package-designator)
       package-designator
       (oget *package-table* (string package-designator))))
+
+(defun delete-package (package-designator)
+  ;; TODO: Signal a correctlable error in case the package-designator does not
+  ;; name a package.
+  ;; TODO: Implement unuse-package and remove the deleted package from packages
+  ;; that use it.
+  (delete-property (package-name (find-package-or-fail package-designator))
+                   *package-table*))
 
 (defun %make-package (name use)
   (when (find-package name)
@@ -88,10 +97,14 @@
   (let (use)
     (dolist (option options)
       (ecase (car option)
-       (:use
-        (setf use (append use (cdr option))))))
-    `(eval-when (:compile-toplevel :load-toplevel :execute)
-       (%defpackage ',(string package) ',use))))
+        (:use
+         (setf use (append use (cdr option))))))
+    `(progn
+       (eval-when (:load-toplevel :execute)
+         (%defpackage ',(string package) ',use))
+       (eval-when (:compile-toplevel)
+         (make-package ',(string package) :use ',use)))))
+
 
 (defun redefine-package (package use)
   (setf (oget package "use") use)
@@ -102,7 +115,8 @@
         (use (resolve-package-list use)))
     (if package
         (redefine-package package use)
-        (%make-package name use))))
+        (make-package name :use use))))
+
 
 (defun find-symbol (name &optional (package *package*))
   (let* ((package (find-package-or-fail package))

@@ -15,6 +15,12 @@
 
 (/debug "loading sequence.lisp!")
 
+(defun sequencep (thing)
+  (or (listp thing) (vectorp thing)))
+
+(defun not-seq-error (thing)
+  (error "`~S' is not of type SEQUENCE" thing))
+
 (defun length (seq)
   (cond
     ((stringp seq)
@@ -22,13 +28,21 @@
     ((arrayp seq)
      (oget seq "length"))
     ((listp seq)
-     (list-length seq))))
+     (list-length seq))
+    (t
+     (not-seq-error seq))))
 
-(defun sequencep (thing)
-  (or (listp thing) (vectorp thing)))
+(defun vector-reverse (vector)
+  (let* ((length (length vector))
+         (new-vector (make-array length :element-type (array-element-type vector))))
+    (dotimes (index length new-vector)
+      (setf (aref new-vector index) (aref vector (- length (1+ index)))))))
 
-(defun not-seq-error (thing)
-  (error "`~S' is not of type SEQUENCE" thing))
+(defun reverse (sequence)
+  "Return a new sequence containing the same elements but in reverse order."
+  (etypecase sequence
+    (list (revappend sequence '()))
+    (vector (vector-reverse sequence))))
 
 (defmacro do-sequence ((elt seq &optional (index (gensym "i") index-p)) &body body)
   (let ((nseq (gensym "seq")))
@@ -47,6 +61,54 @@
              (let ((,elt (aref ,nseq ,index)))
                ,@body))))))
 
+(defun count (item sequence &key from-end (start 0) end
+                                 key (test #'eql testp)
+                                 (test-not #'eql test-not-p))
+  ;; TODO: Implement START and END efficiently for all the sequence
+  ;; functions.
+  (let* ((l (length sequence))
+         (end (or end l))
+         (result 0))
+    (if from-end
+      (do-sequence (x (reverse sequence) index)
+        (when (and (<= start (- l index 1))
+                   (< (- l index 1) end)
+                   (satisfies-test-p item x
+                                     :key key :test test :testp testp
+                                     :test-not test-not :test-not-p test-not-p))
+          (incf result)))
+      (do-sequence (x sequence index)
+        (when (and (<= start index)
+                   (< index end)
+                   (satisfies-test-p item x
+                                     :key key :test test :testp testp
+                                     :test-not test-not :test-not-p test-not-p))
+          (incf result))))
+    result))
+
+(defun count-if (predicate sequence &key from-end (start 0) end key)
+  ;; TODO: Implement START and END efficiently for all the sequence
+  ;; functions.
+  (let* ((l (length sequence))
+         (end (or end l))
+         (result 0))
+    (if from-end
+      (do-sequence (x (reverse sequence) index)
+        (when (and (<= start (- l index 1))
+                   (< (- l index 1) end)
+                   (funcall predicate (if key (funcall key x) x)))
+          (incf result)))
+      (do-sequence (x sequence index)
+        (when (and (<= start index)
+                   (< index end)
+                   (funcall predicate (if key (funcall key x) x)))
+          (incf result))))
+    result))
+
+(defun count-if-not (predicate sequence &key from-end (start 0) end key)
+  (count-if (complement predicate) sequence :from-end from-end
+            :start start :end end :key key))
+
 (defun find (item seq &key key (test #'eql testp) (test-not #'eql test-not-p))
   (do-sequence (x seq)
     (when (satisfies-test-p item x :key key :test test :testp testp
@@ -63,35 +125,43 @@
           (return x)))))
 
 (defun position (elt sequence
-                 &key key (test #'eql testp)
+                 &key from-end key (test #'eql testp)
                    (test-not #'eql test-not-p)
                    (start 0) end)
   ;; TODO: Implement START and END efficiently for all the sequence
   ;; functions.
-  (let ((end (or end (length sequence))))
+  (let ((end (or end (length sequence)))
+        (result nil))
     (do-sequence (x sequence index)
       (when (and (<= start index)
                  (< index end)
                  (satisfies-test-p elt x
                                    :key key :test test :testp testp
                                    :test-not test-not :test-not-p test-not-p))
-        (return index)))))
+        (setf result index)
+        (unless from-end
+            (return))))
+    result))
 
-;; TODO: need to support &key from-end
 (defun position-if (predicate sequence
-                 &key key (start 0) end)
+                 &key from-end key (start 0) end)
   ;; TODO: Implement START and END efficiently for all the sequence
   ;; functions.
-  (let ((end (or end (length sequence))))
+  (let ((end (or end (length sequence)))
+        (result nil))
     (do-sequence (x sequence index)
       (when (and (<= start index)
                  (< index end)
                  (funcall predicate (if key (funcall key x) x)))
-        (return index)))))
+        (setf result index)
+        (unless from-end
+          (return))))
+    result))
 
 (defun position-if-not (predicate sequence
-                 &key key (start 0) end)
-  (position-if (complement predicate) sequence :key key :start start :end end))
+                 &key from-end key (start 0) end)
+  (position-if (complement predicate) sequence
+               :from-end from-end :key key :start start :end end))
 
 (defun remove (x seq &key key (test #'eql testp) (test-not #'eql test-not-p))
   (cond
@@ -194,32 +264,6 @@
 (defun copy-seq (sequence)
   (subseq sequence 0))
 
-
-;;; Reduce (based on SBCL's version)
-
-(defun reduce (function sequence &key key from-end (start 0) end (initial-value nil ivp))
-  (let ((key (or key #'identity))
-        (end (or end (length sequence))))
-    (if (= end start)
-        (if ivp initial-value (funcall function))
-        (macrolet ((reduce-list (function sequence key start end initial-value ivp from-end)
-                     `(let ((sequence
-                             ,(if from-end
-                                  `(reverse (nthcdr ,start ,sequence))
-                                  `(nthcdr ,start ,sequence))))
-                        (do ((count (if ,ivp ,start (1+ ,start))
-                                    (1+ count))
-                             (sequence (if ,ivp sequence (cdr sequence))
-                                       (cdr sequence))
-                             (value (if ,ivp ,initial-value (funcall ,key (car sequence)))
-                                    ,(if from-end
-                                         `(funcall ,function (funcall ,key (car sequence)) value)
-                                         `(funcall ,function value (funcall ,key (car sequence))))))
-                            ((>= count ,end) value)))))
-          (if from-end
-              (reduce-list function sequence key start end initial-value ivp t)
-              (reduce-list function sequence key start end initial-value ivp nil))))))
-
 (defun elt (sequence index)
   (when (< index 0)
     (error "The index ~D is below zero." index))
@@ -236,6 +280,41 @@
        (when (>= index length)
          (error "The index ~D is too large for ~A of length ~D." index 'vector length))
        (aref sequence index)))))
+
+(defun zero-args-reduce (function initial-value initial-value-p)
+  (if initial-value-p
+      (funcall function initial-value)
+      (funcall function)))
+
+(defun one-args-reduce (function element from-end initial-value initial-value-p)
+  (if from-end
+      (if initial-value-p
+          (funcall function initial-value element)
+          element)
+      (if initial-value-p
+          (funcall function element initial-value)
+          element)))
+
+(defun reduce (function sequence &key (key #'identity) from-end (start 0) end (initial-value nil initial-value-p))
+  (let* ((sequence (subseq sequence start (when end end)))
+         (sequence-length (length sequence)))
+    (case sequence-length
+      (0 (zero-args-reduce function initial-value initial-value-p))
+      (1 (one-args-reduce function (funcall key (elt sequence 0)) from-end initial-value initial-value-p))
+      (t (let* ((function (if from-end
+                             #'(lambda (x y) (funcall function y x))
+                             function))
+                (sequence (if from-end
+                              (reverse sequence)
+                              sequence))
+                (value (elt sequence 0)))
+           (when initial-value-p
+             (setf value (funcall function initial-value (funcall key value))))
+           (etypecase sequence
+             (list (dolist (elt (cdr sequence) value)
+                     (setf value (funcall function value (funcall key elt)))))
+             (vector (dotimes (index (1- sequence-length) value)
+                       (setf value (funcall function value (funcall key (elt sequence (1+ index)))))))))))))
 
 (defun mismatch (sequence1 sequence2 &key key (test #'eql testp) (test-not nil test-not-p)
                                        (start1 0) (end1 (length sequence1))
@@ -281,3 +360,67 @@
      (array #'vector-search)
      (t (not-seq-error sequence2)))
    sequence1 sequence2 args))
+
+(defparameter *iterator-done* (gensym))
+
+(defun make-list-iterator (the-list)
+  (let ((tail the-list))
+    (lambda ()
+      (if (null tail)
+	  *iterator-done*
+	  (pop tail)))))
+
+(defun make-vector-iterator (the-vector)
+  (let ((i 0)
+	(len (length the-vector)))
+    (lambda ()
+      (if (= i len)
+	  *iterator-done*
+	  (let ((item (aref the-vector i)))
+	    (incf i)
+	    item)))))
+
+(defun make-iterator (sequence)
+  (funcall (cond ((listp sequence) #'make-list-iterator)
+		 ((vectorp sequence) #'make-vector-iterator)
+		 (t (error "Not of type SEQUENCE")))
+	   sequence))
+
+(defun make-list-collector ()
+  (let* (the-list tail)
+    (lambda (&rest item)
+      (cond ((and item (null the-list))
+	     (setf the-list item
+		   tail item))
+	    (item (setf (cdr tail) item
+			tail (cdr tail))))
+      the-list)))
+
+(defun make-vector-collector (&key (element-type t))
+  (let* ((the-vector (make-array 0 :adjustable t :element-type element-type :fill-pointer 0)))
+    (lambda (&rest item)
+      (when item
+	(vector-push-extend (first item) the-vector))
+      the-vector)))
+
+(defun make-collector (type)
+  (case type
+    (list (make-list-collector))
+    (string (make-vector-collector :element-type 'character))
+    (vector (make-vector-collector))
+    (t
+     (when (and (listp type)
+		(eql 'vector (first type)))
+       (make-vector-collector :element-type (or (second type) t))))))
+  
+
+(defun map (result-type function &rest sequences)
+  (let ((iterators (mapcar #'make-iterator sequences))
+	(result-collector (make-collector result-type)))
+    (do ((args (mapcar #'funcall iterators) (mapcar #'funcall iterators)))
+	((find *iterator-done* args)
+	 (when result-type (funcall result-collector)))
+      (if result-type
+	  (funcall result-collector (apply function args))
+	  (apply function args)))))
+

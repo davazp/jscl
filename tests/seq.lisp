@@ -2,6 +2,24 @@
 (defvar halve  (lambda (x) (/ x 2)))
 (defvar double (lambda (x) (* x 2)))
 
+; COUNT
+(test (= (count #\a "how many A's are there in here?") 2))
+(test (= (count #\a "how many A's are there in here?" :start 10) 1))
+(test (= (count 'a '(a b c d e a e f)) 2))
+(test (= (count 1 '(1 2 2 3 2 1 2 2 5 4) :key #'1-) 5))
+(test (= (count #\1 "11111011" :start 2 :end 7) 4))
+(test (= (count #\1 "11111011" :start 2 :end 7 :from-end t) 4))
+
+;; COUNT-IF, COUNT-IF-NOT
+(test (= (count-if #'upper-case-p "The Crying of Lot 49" :start 4) 2))
+(test (= (count-if #'not '(a b nil c d nil e)) 2))
+(test (= (count-if #'evenp '(1 2 3 4 4 1 8 10 1) :key #'1+) 4))
+(test (= (count-if #'evenp '(1 2 3 4 4 1 8 10 1) :key #'1+ :from-end t) 4))
+(test (= (count-if-not #'oddp '((1) (2) (3) (4)) :key #'car) 2))
+(test (= (count-if-not #'oddp '((1) (2) (3) (4)) :key #'car :from-end t) 2))
+(test (= (count-if-not #'not '(a b nil c d nil e)) 5))
+(test (= (count-if-not #'oddp '(1 2 3 4 4 1 8 10 1) :key #'1+) 4))
+
 ; FIND
 (test (find 1 #(2 1 3)))
 (test (find 1 '(2 1 3)))
@@ -36,10 +54,16 @@
 (test (= (position '(1 2) #((1 2) (3 4)) :test #'equal) 0))
 (test (= (position 1 #(1 1 3) :test-not #'=) 2))
 (test (= (position 1 '(1 1 3) :test-not #'=) 2))
+(test (= (position 1 '(1 1 3) :from-end nil) 0))
+(test (= (position 1 '(1 1 3) :from-end t) 1))
+(test (= (position #\a "baobab" :from-end t) 4))
 
 ;; POSITION-IF, POSITION-IF-NOT
 (test (= 2 (position-if #'oddp '((1) (2) (3) (4)) :start 1 :key #'car)))
 (test (= 4 (position-if-not #'integerp '(1 2 3 4 X))))  ;; (hyperspec example used "5.0", but we don't have a full numeric tower yet!)
+(test (= 4 (position-if #'oddp '((1) (2) (3) (4) (5)) :start 1 :key #'car :from-end t)))
+(test (= 4 (position-if-not #'integerp '(1 2 3 4 X Y))))  ;; (hyperspec example used "5.0", but we don't have a full numeric tower yet!)
+(test (= 5 (position-if-not #'integerp '(1 2 3 4 X Y) :from-end t)))
 
 ; REMOVE-IF
 (test (equal (remove-if     #'zerop '(1 0 2 0 3)) '(1 2 3)))
@@ -55,6 +79,20 @@
   (test (equal (subseq nums 2 4) '(3 4)))
   ; Test that nums hasn't been altered: SUBSEQ should construct fresh lists
   (test (equal nums '(1 2 3 4 5))))
+
+;; REVERSE
+(test (eq (reverse nil) nil))
+(test (equal (reverse '(a b c)) '(c b a)))
+;; FIXME: When replace the following two cases when implemented.
+(test (zerop (length (reverse #()))))
+;; (test (equalp (reverse #(a b c)) #(c b a)))
+(let ((xs (reverse #(a b c)))
+      (pattern #(c b a)))
+  (test (equal (aref xs 0) (aref pattern 0)))
+  (test (equal (aref xs 1) (aref pattern 1)))
+  (test (equal (aref xs 2) (aref pattern 2))))
+(test (equal (reverse "") ""))
+(test (equal (reverse "abc") "cba"))
 
 ;;; REDUCE
 (test (equal (reduce (lambda (x y) `(+ ,x ,y))
@@ -77,6 +115,24 @@
 
 (test (equal (reduce #'+ '(100) :key #'1+)
              101))
+(test (= (reduce #'+ #(1 2 3))
+         6))
+(test (equal '((Z . C) . D)
+             (reduce #'cons #(a b c d e f) :start 2 :end 4 :initial-value 'z)))
+
+(test (equal '1
+             (reduce #'(lambda () (error "When reducing a sequence with one element the function should not be called"))
+                     #(1))))
+
+(test (equal 3 (reduce #'(lambda () (error "When reducing a sequence with one element the function should not be called"))
+                       #(1 2 3 4) :start 2 :end 3)))
+
+;; The following tests reduced reduce were copied from ANSI CL TESTS.
+(test (equal (reduce #'cons '(a b c d e f) :start 1 :end 4 :from-end t)
+             '(b c . d)))
+(test (equal (reduce #'cons '(a b c d e f) :start 1 :end 4 :from-end t
+                                           :initial-value nil)
+             '(b c d)))
 
 ; MISMATCH
 (test (= (mismatch '(1 2 3) '(1 2 3 4 5 6)) 3))
@@ -92,3 +148,116 @@
 (test (not (search '(foo) '(1 2 3))))
 (test (= (search '(1) '(4 5 6 1 2 3)) 3))
 (test (= (search #(1) #(4 5 6 1 2 3)) 3))
+
+;;; MAP
+
+(test-equal
+ (map 'list #'list '())
+ nil)
+
+(test-equal
+ (let ((v (map 'vector #'list '())))
+   (and (vectorp v)
+	(zerop (length v))))
+ t)
+
+(test-equal
+ (map 'string #'code-char '())
+ "")
+
+(test-equal
+ (map 'list #'list '(1 2 3))
+ '((1) (2) (3)))
+
+(test-equal
+ (map 'list #'list #(1 2 3))
+ '((1) (2) (3)))
+
+(test-equal
+ (map 'list #'list "123")
+ '((#\1) (#\2) (#\3)))
+
+; CHAR-UPCASE cannot be sharp-quoted currently
+(test-equal
+ (map 'string (lambda (c) (char-upcase c)) '(#\a #\b #\c))
+ "ABC")
+
+(test-equal
+ (map 'string (lambda (c) (char-upcase c)) #(#\a #\b #\c))
+ "ABC")
+
+(test-equal
+ (map 'string (lambda (c) (char-upcase c)) "abc")
+ "ABC")
+
+(test-equal
+ (map '(vector character) (lambda (c) (char-upcase c)) '(#\a #\b #\c))
+ "ABC")
+
+(test-equal
+ (map '(vector character) (lambda (c) (char-upcase c)) #(#\a #\b #\c))
+ "ABC")
+
+(test-equal
+ (map '(vector character) (lambda (c) (char-upcase c)) "abc")
+ "ABC")
+
+(test-equal
+ (let ((v (map 'vector #'list '(1 2 3))))
+   (and (vectorp v)
+	(equal '(1) (aref v 0))
+	(equal '(2) (aref v 1))
+	(equal '(3) (aref v 2))))
+ t)
+
+(test-equal
+ (let ((v (map 'vector #'list #(1 2 3))))
+   (and (vectorp v)
+	(equal '(1) (aref v 0))
+	(equal '(2) (aref v 1))
+	(equal '(3) (aref v 2))))
+ t)
+
+(test-equal
+ (let ((v (map 'vector #'list "123")))
+   (and (vectorp v)
+	(equal '(#\1) (aref v 0))
+	(equal '(#\2) (aref v 1))
+	(equal '(#\3) (aref v 2))))
+ t)
+
+(test-equal
+ (let ((v (map '(vector) #'list '(1 2 3))))
+   (and (vectorp v)
+	(equal '(1) (aref v 0))
+	(equal '(2) (aref v 1))
+	(equal '(3) (aref v 2))))
+ t)
+
+(test-equal
+ (let ((v (map '(vector) #'list #(1 2 3))))
+   (and (vectorp v)
+	(equal '(1) (aref v 0))
+	(equal '(2) (aref v 1))
+	(equal '(3) (aref v 2))))
+ t)
+
+(test-equal
+ (let ((v (map '(vector) #'list "123")))
+   (and (vectorp v)
+	(equal '(#\1) (aref v 0))
+	(equal '(#\2) (aref v 1))
+	(equal '(#\3) (aref v 2))))
+ t)
+
+(test-equal
+ (map 'list #'list '(a b c) #(1 2 3) "xyz")
+ '((a 1 #\x) (b 2 #\y) (c 3 #\z)))
+
+
+(test-equal
+ (let* ((acc '())
+	(result (null (map nil (lambda (x) (push x acc)) '(1 2 3)))))
+   (list acc result))
+ '((3 2 1) t))
+ 

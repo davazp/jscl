@@ -13,6 +13,8 @@
    (format t "~a test(s) passed unexpectedly.~%" *unexpected-passes*))
 
  (terpri)
- 
- #+jscl (init)
- )
+
+ #+jscl
+ (when #j:phantom
+   (#j:phantom:exit *failed-tests*))
+)

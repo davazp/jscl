@@ -17,18 +17,6 @@
 ;; along with JSCL.  If not, see <http://www.gnu.org/licenses/>.
 
 ;;; Duplicate from boot.lisp by now
-(defmacro with-collect (&body body)
-  (let ((head (gensym))
-        (tail (gensym)))
-    `(let* ((,head (cons 'sentinel nil))
-            (,tail ,head))
-       (flet ((collect (x)
-                (rplacd ,tail (cons x nil))
-                (setq ,tail (cdr ,tail))
-                x))
-         ,@body)
-       (cdr ,head))))
-
 (defmacro while (condition &body body)
   `(do ()
        ((not ,condition))
@@ -45,3 +33,11 @@
   (declare (ignorable x))
   ;; (write-line x)
   )
+
+(defun j-reader (stream subchar arg)
+  (declare (ignorable subchar arg))
+  (assert (char= #\: (read-char stream nil :eof)) nil "FFI descriptor must start with a semicolon.")
+  (loop :for ch := (read-char stream nil #\Space)
+        :until (terminalp ch)))
+
+(set-dispatch-macro-character #\# #\J #'j-reader)

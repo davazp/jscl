@@ -29,13 +29,25 @@
          '#'(lambda (form)
               (destructuring-bind (name args &body body)
                   form
-                (let ((whole (gensym)))
+                (let* ((whole (gensym))
+                       (expander `(function
+                                   (lambda (,whole)
+                                    (block ,name
+                                      (destructuring-bind ,args ,whole
+                                        ,@body))))))
+
+                  ;; If we are boostrapping JSCL, we need to quote the
+                  ;; macroexpander, because the macroexpander will
+                  ;; need to be dumped in the final environment
+                  ;; somehow.
+                  (when (find :jscl-xc *features*)
+                    (setq expander `(quote ,expander)))
+                  
                   `(eval-when (:compile-toplevel :execute)
-                     (%compile-defmacro ',name
-                                        '#'(lambda (,whole)
-                                             (block ,name
-                                               (destructuring-bind ,args ,whole
-                                                 ,@body))))))))))
+                     (%compile-defmacro ',name ,expander))
+
+                  )))))
+    
     (%compile-defmacro 'defmacro defmacro-macroexpander)))
 
 (defmacro declaim (&rest decls)
@@ -269,19 +281,6 @@
                                   (list (first v) (third v))))
                            varlist)))))))
 
-(defmacro with-collect (&body body)
-  (let ((head (gensym))
-        (tail (gensym)))
-    `(let* ((,head (cons 'sentinel nil))
-            (,tail ,head))
-       (flet ((collect (x)
-                (rplacd ,tail (cons x nil))
-                (setq ,tail (cdr ,tail))
-                x))
-         ,@body)
-       (cdr ,head))))
-
-
 (defmacro loop (&body body)
   `(while t ,@body))
 
@@ -315,9 +314,8 @@
       (<= (char-code #\A) (char-code x) (char-code #\Z))))
 
 (defun digit-char-p (x)
-  (if (and (<= (char-code #\0) (char-code x) (char-code #\9)))
-      (- (char-code x) (char-code #\0))
-      nil))
+  (and (<= (char-code #\0) (char-code x) (char-code #\9))
+       (- (char-code x) (char-code #\0))))
 
 (defun digit-char (weight)
   (and (<= 0 weight 9)
